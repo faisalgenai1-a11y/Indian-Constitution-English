@@ -1,8 +1,9 @@
 streamlit
 pypdf
+faiss-cpu
 sentence-transformers
 langchain
 langchain-community
-langchain-text-splitter
-faiss-cpu
 groq
+transformers
+torch
