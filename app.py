@@ -11,7 +11,7 @@ import streamlit as st
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from langchain_community.vectorstores import FAISS
-from langchain_text_splitter import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from groq import Groq
 
 groq_api_key = st.secrets["YOUR_API_KEY"]
