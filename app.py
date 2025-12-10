@@ -26,9 +26,9 @@ client = Groq(api_key=groq_api_key)
 
 def call_llm(prompt: str) -> str:
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",   # same as Colab
+        model="llama-3.1-8b-instant",   # same as Colab
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=800,
+        max_tokens=300,
         temperature=0.2,
     )
     return response.choices[0].message.content
@@ -125,7 +125,7 @@ If the context does not clearly contain the answer, reply EXACTLY:
 Context me available nahi hai.
 
 Write the answer in simple English + thoda easy explanation.
-Use around 500–700 words.
+Use around 150–200 words.
 
 Format your answer like this:
 - 3–5 bullet points explaining the main idea
