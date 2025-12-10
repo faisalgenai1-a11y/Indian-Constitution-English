@@ -3,5 +3,6 @@ pypdf
 sentence-transformers
 langchain
 langchain-community
+langchain-text-splitter
 faiss-cpu
 groq
