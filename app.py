@@ -11,15 +11,14 @@ import streamlit as st
 from pypdf import PdfReader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 from groq import Groq
 
-# ---------------------------
-# Load Groq API Key
-# ---------------------------
+# Load Groq API key from Streamlit Secrets
 groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
+# LLM Answer Function
 def get_llm_answer(question, context):
     prompt = f"""
     You are an expert on the Indian Constitution.
@@ -33,15 +32,17 @@ def get_llm_answer(question, context):
 
     ANSWER:
     """
+
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
     )
-    return response.choices[0].message["content"]
 
-# ---------------------------
-# Vector DB Builder
-# ---------------------------
+    # FIXED LINE ↓↓↓
+    return response.choices[0].message.content
+
+
+# Load Vector DB from PDF
 @st.cache_resource
 def load_vector_db(pdf_file):
     reader = PdfReader(pdf_file)
@@ -49,31 +50,24 @@ def load_vector_db(pdf_file):
     for page in reader.pages:
         text += page.extract_text()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=150
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     chunks = splitter.split_text(text)
 
-    # Embedding model (correct import now)
-    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    embeddings = model.encode(chunks)
 
-    # FIX: Correct FAISS builder
-    db = FAISS.from_texts(chunks, embedding_model)
+    db = FAISS.from_texts(chunks, embeddings)
 
     return db, chunks
 
 
-# ---------------------------
 # Streamlit UI
-# ---------------------------
-st.title("📘 Indian Constitution QA App")
+st.title("📘 Indian Constitution QA ")
 
 uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
 if uploaded_pdf:
     st.success("PDF loaded! Creating Vector Store… (1st time only)")
-
     vectordb, chunks = load_vector_db(uploaded_pdf)
 
     question = st.text_input("Ask any question about the Constitution:")
