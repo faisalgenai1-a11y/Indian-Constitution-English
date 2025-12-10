@@ -14,7 +14,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from groq import Groq
 
-groq_api_key = st.secrets["YOUR_API_KEY"]
+groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
 def get_llm_answer(question, context):
