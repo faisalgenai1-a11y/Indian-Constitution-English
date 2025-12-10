@@ -11,18 +11,20 @@ import streamlit as st
 from pypdf import PdfReader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from groq import Groq
 
-# Load Groq API key from Streamlit Secrets
+# Load API Key from Streamlit Secrets
 groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
-# LLM Answer Function
+# -------------------------
+# Function to call LLM
+# -------------------------
 def get_llm_answer(question, context):
     prompt = f"""
     You are an expert on the Indian Constitution.
-    Use the below context to answer accurately.
+    Use the context to answer clearly.
 
     CONTEXT:
     {context}
@@ -35,45 +37,51 @@ def get_llm_answer(question, context):
 
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt}]
     )
 
-    # FIXED LINE ↓↓↓
-    return response.choices[0].message.content
+    return response.choices[0].message["content"]
 
 
-# Load Vector DB from PDF
+# -------------------------
+# Load PDF + Create Vector DB
+# -------------------------
 @st.cache_resource
 def load_vector_db(pdf_file):
     reader = PdfReader(pdf_file)
-    text = ""
+    full_text = ""
     for page in reader.pages:
-        text += page.extract_text()
+        page_text = page.extract_text()
+        if page_text:
+            full_text += page_text
 
+    # Split into chunks
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    chunks = splitter.split_text(text)
+    chunks = splitter.split_text(full_text)
 
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = model.encode(chunks)
+    # Embeddings
+    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    vector_db = FAISS.from_texts(chunks, embedding_model)
 
-    db = FAISS.from_texts(chunks, embeddings)
-
-    return db, chunks
+    return vector_db, chunks
 
 
-# Streamlit UI
+# -------------------------
+# UI Starts Here
+# -------------------------
 st.title("📘 Indian Constitution QA ")
 
 uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
 if uploaded_pdf:
     st.success("PDF loaded! Creating Vector Store… (1st time only)")
+
     vectordb, chunks = load_vector_db(uploaded_pdf)
 
     question = st.text_input("Ask any question about the Constitution:")
 
     if question:
-        docs = vectordb.similarity_search(question, k=8)
+        docs = vectordb.similarity_search(question, k=5)
         context = "\n\n".join([d.page_content for d in docs])
 
         st.write("### 📌 Answer:")
