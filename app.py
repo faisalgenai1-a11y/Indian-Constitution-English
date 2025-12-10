@@ -8,10 +8,14 @@ Original file is located at
 """
 
 import streamlit as st
+import tempfile
+import re
+
 from pypdf import PdfReader
-from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 from groq import Groq
 
 # -----------------------------
@@ -20,75 +24,139 @@ from groq import Groq
 groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
-def get_llm_answer(question, context):
-    prompt = f"""
-    You are an expert on the Indian Constitution.
-    
-    IMPORTANT RULES:
-    - Answer ONLY using the provided context.
-    - Do NOT guess.
-    - If context does not contain the answer, say:
-      "Context me available nahi hai."
-    
-    CONTEXT:
-    {context}
-    
-    QUESTION:
-    {question}
-    
-    ANSWER:
-    """
-
+def call_llm(prompt: str) -> str:
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}]
+        model="llama-3.3-70b-versatile",   # same as Colab
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=800,
+        temperature=0.2,
     )
-
-    return response.choices[0].message.content    # IMPORTANT: correct syntax
+    return response.choices[0].message.content
 
 
 # -----------------------------
-# 2. Create Vector DB
+# 2. Build Vector DB (Colab style)
 # -----------------------------
 @st.cache_resource
-def load_vector_db(pdf_file):
-    reader = PdfReader(pdf_file)
-    text = ""
-    for page in reader.pages:
-        if page.extract_text():
-            text += page.extract_text()
+def build_vectordb(file_bytes: bytes):
+    # Save uploaded PDF to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
 
-    splitter = RecursiveCharacterTextSplitter(
-        separators=["\n\n", "\n", ". ", " "],
-        chunk_size=500,
-        chunk_overlap=100)
-    chunks = splitter.split_text(text)
+    # Use PyPDFLoader like Colab
+    loader = PyPDFLoader(tmp_path)
+    pages = loader.load()
 
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    # Optional: skip first page (title / index)
+    if len(pages) > 1:
+        pages = pages[1:]
 
-    db = FAISS.from_texts(chunks, embedding_model)
-    return db, chunks
+    # Same splitter as Colab
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=150,
+        separators=["\n\n", "\n", ".", " ", ""]
+    )
+
+    docs = text_splitter.split_documents(pages)
+    all_docs = docs[:]  # keep copy for Article search
+
+    # Same (better) embedding model
+    embedding_model = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-mpnet-base-v2"
+    )
+
+    vectordb = FAISS.from_documents(docs, embedding_model)
+
+    return vectordb, all_docs
 
 
 # -----------------------------
-# 3. UI
+# 3. Answer function (same logic as Colab)
+# -----------------------------
+def answer_query(query: str, vectordb, all_docs, k: int = 8) -> str:
+    # 1) Normal semantic search
+    retrieved_docs = vectordb.similarity_search(query, k=k)
+
+    # 2) Article number detection
+    match = re.search(r'\barticle\s+(\d+)', query, re.IGNORECASE)
+
+    if match:
+        article_num = match.group(1)
+        article_pattern_1 = f"{article_num}."
+        article_pattern_2 = f"Article {article_num}"
+
+        article_docs = []
+
+        for d in all_docs:
+            text = d.page_content
+            if article_pattern_1 in text or article_pattern_2 in text:
+                article_docs.append(d)
+
+        # Put exact article docs on top
+        if article_docs:
+            retrieved_docs = article_docs + retrieved_docs
+
+    if not retrieved_docs:
+        return "Context me available nahi hai."  # same message
+
+    # 3) Remove duplicates, keep max 8
+    unique_texts = []
+    final_docs = []
+
+    for d in retrieved_docs:
+        if d.page_content not in unique_texts:
+            unique_texts.append(d.page_content)
+            final_docs.append(d)
+
+        if len(final_docs) >= 8:
+            break
+
+    context = "\n\n".join(d.page_content for d in final_docs)
+
+    # 4) Prompt (almost same as Colab, bas wording Hindi/English mix)
+    prompt = f"""
+You are a law teacher explaining the Constitution of India.
+
+Use ONLY the context given below to answer the question.
+Do NOT use any outside or general knowledge.
+If the context does not clearly contain the answer, reply EXACTLY:
+Context me available nahi hai.
+
+Write the answer in simple English + thoda easy explanation.
+Use around 500–700 words.
+
+Format your answer like this:
+- 3–5 bullet points explaining the main idea
+- Then 2–3 short sentences summary
+- Then give 1 small real-life style example
+
+Context from the Constitution:
+{context}
+
+Question: {query}
+"""
+
+    return call_llm(prompt)
+
+
+# -----------------------------
+# 4. Streamlit UI
 # -----------------------------
 st.title("📘 Indian Constitution QA App (Groq + RAG)")
 
 uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
-if uploaded_pdf:
+if uploaded_pdf is not None:
+    st.success("PDF loaded! Creating Vector Store… (first time thoda time lagega)")
 
-    st.success("PDF loaded! Creating Vector Store… (this takes 1 minute first time)")
-
-    vectordb, chunks = load_vector_db(uploaded_pdf)
+    # Important: pass bytes, not UploadedFile object
+    vectordb, all_docs = build_vectordb(uploaded_pdf.getvalue())
 
     question = st.text_input("Ask any question about the Constitution:")
 
     if question:
-        docs = vectordb.similarity_search(question, k=5)
-        context = "\n\n".join([d.page_content for d in docs])
-
         st.write("### 🔍 Answer:")
-        answer = get_llm_answer(question, context)
+        answer = answer_query(question, vectordb, all_docs)
         st.write(answer)
