@@ -9,22 +9,27 @@ Original file is located at
 
 import streamlit as st
 from pypdf import PdfReader
+from sentence_transformers import SentenceTransformer
+import numpy as np
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from groq import Groq
 
-# Load API Key from Streamlit Secrets
+
+# --------------------------
+# Load Groq API Key
+# --------------------------
 groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
-# -------------------------
-# Function to call LLM
-# -------------------------
+
+# --------------------------
+# Function to Query LLM
+# --------------------------
 def get_llm_answer(question, context):
     prompt = f"""
     You are an expert on the Indian Constitution.
-    Use the context to answer clearly.
+    Use the following context to answer the question.
 
     CONTEXT:
     {context}
@@ -40,48 +45,56 @@ def get_llm_answer(question, context):
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return response.choices[0].message["content"]
+    # NEW Groq format → message.content is a list of objects
+    return response.choices[0].message.content[0].text
 
 
-# -------------------------
-# Load PDF + Create Vector DB
-# -------------------------
+# --------------------------
+# Create Vector DB From PDF
+# --------------------------
 @st.cache_resource
 def load_vector_db(pdf_file):
+
     reader = PdfReader(pdf_file)
-    full_text = ""
+    text = ""
+
     for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            full_text += page_text
+        extracted = page.extract_text()
+        if extracted:
+            text += extracted
 
-    # Split into chunks
+    # Split PDF text
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    chunks = splitter.split_text(full_text)
+    chunks = splitter.split_text(text)
 
-    # Embeddings
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    vector_db = FAISS.from_texts(chunks, embedding_model)
+    # Load embedding model
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    embeddings = model.encode(chunks)
 
-    return vector_db, chunks
+    # Convert embeddings to list of numpy arrays
+    embeddings = [np.array(e) for e in embeddings]
+
+    # Build FAISS DB
+    db = FAISS.from_embeddings(list(zip(chunks, embeddings)))
+
+    return db, chunks
 
 
-# -------------------------
-# UI Starts Here
-# -------------------------
+# --------------------------
+# Streamlit UI
+# --------------------------
 st.title("📘 Indian Constitution QA ")
 
 uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
 if uploaded_pdf:
     st.success("PDF loaded! Creating Vector Store… (1st time only)")
-
     vectordb, chunks = load_vector_db(uploaded_pdf)
 
     question = st.text_input("Ask any question about the Constitution:")
 
     if question:
-        docs = vectordb.similarity_search(question, k=5)
+        docs = vectordb.similarity_search(question, k=6)
         context = "\n\n".join([d.page_content for d in docs])
 
         st.write("### 📌 Answer:")
