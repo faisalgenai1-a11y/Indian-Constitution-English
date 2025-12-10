@@ -23,14 +23,19 @@ client = Groq(api_key=groq_api_key)
 def get_llm_answer(question, context):
     prompt = f"""
     You are an expert on the Indian Constitution.
-    Answer using the context below.
-
+    
+    IMPORTANT RULES:
+    - Answer ONLY using the provided context.
+    - Do NOT guess.
+    - If context does not contain the answer, say:
+      "Context me available nahi hai."
+    
     CONTEXT:
     {context}
-
+    
     QUESTION:
     {question}
-
+    
     ANSWER:
     """
 
@@ -53,7 +58,10 @@ def load_vector_db(pdf_file):
         if page.extract_text():
             text += page.extract_text()
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+    splitter = RecursiveCharacterTextSplitter(
+        separators=["\n\n", "\n", ". ", " "],
+        chunk_size=500,
+        chunk_overlap=100)
     chunks = splitter.split_text(text)
 
     embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
