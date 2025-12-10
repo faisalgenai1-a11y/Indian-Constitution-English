@@ -9,7 +9,7 @@ Original file is located at
 
 import streamlit as st
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from groq import Groq
@@ -46,10 +46,8 @@ def load_vector_db(pdf_file):
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     chunks = splitter.split_text(text)
 
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = model.encode(chunks)
-
-    db = FAISS.from_texts(chunks, embeddings)
+    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    db = FAISS.from_texts(chunks, embedding_model)
     return db, chunks
 
 st.title("📘 Indian Constitution QA App (Groq + RAG)")
