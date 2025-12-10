@@ -8,19 +8,23 @@ Original file is located at
 """
 
 import streamlit as st
+import numpy as np
 from pypdf import PdfReader
-from langchain.embeddings import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from groq import Groq
 
+# -----------------------------
+# Groq API
+# -----------------------------
 groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
 def get_llm_answer(question, context):
     prompt = f"""
     You are an expert on the Indian Constitution.
-    Use the below context to answer accurately.
+    Use the context below to answer clearly.
 
     CONTEXT:
     {context}
@@ -36,33 +40,44 @@ def get_llm_answer(question, context):
     )
     return response.choices[0].message["content"]
 
+# -----------------------------
+# Load Vector DB
+# -----------------------------
 @st.cache_resource
 def load_vector_db(pdf_file):
     reader = PdfReader(pdf_file)
     text = ""
     for page in reader.pages:
-        text += page.extract_text()
+        extracted = page.extract_text()
+        if extracted:
+            text += extracted
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     chunks = splitter.split_text(text)
 
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    db = FAISS.from_texts(chunks, embedding_model)
+    # Embeddings: Using SentenceTransformer
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    embeddings = model.encode(chunks)
+
+    db = FAISS.from_embeddings(embeddings, chunks)
     return db, chunks
 
+# -----------------------------
+# UI
+# -----------------------------
 st.title("📘 Indian Constitution QA App (Groq + RAG)")
 
 uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
 if uploaded_pdf:
-    st.success("PDF loaded! Creating Vector Store… (1st time only)")
+    st.success("PDF Loaded! Creating Vector Store… (only first time)")
 
     vectordb, chunks = load_vector_db(uploaded_pdf)
 
     question = st.text_input("Ask any question about the Constitution:")
 
     if question:
-        docs = vectordb.similarity_search(question, k=8)
+        docs = vectordb.similarity_search(question, k=5)
         context = "\n\n".join([d.page_content for d in docs])
 
         st.write("### 📌 Answer:")
