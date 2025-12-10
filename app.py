@@ -11,18 +11,19 @@ import streamlit as st
 from pypdf import PdfReader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from groq import Groq
 
+# ---------------------------
 # Load Groq API Key
+# ---------------------------
 groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
-# LLM function
 def get_llm_answer(question, context):
     prompt = f"""
     You are an expert on the Indian Constitution.
-    Use the context below to answer accurately.
+    Use the below context to answer accurately.
 
     CONTEXT:
     {context}
@@ -32,15 +33,15 @@ def get_llm_answer(question, context):
 
     ANSWER:
     """
-
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}]
     )
-
     return response.choices[0].message["content"]
 
-# Build Vector DB
+# ---------------------------
+# Vector DB Builder
+# ---------------------------
 @st.cache_resource
 def load_vector_db(pdf_file):
     reader = PdfReader(pdf_file)
@@ -48,28 +49,37 @@ def load_vector_db(pdf_file):
     for page in reader.pages:
         text += page.extract_text()
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=150
+    )
     chunks = splitter.split_text(text)
 
+    # Embedding model (correct import now)
     embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
+    # FIX: Correct FAISS builder
     db = FAISS.from_texts(chunks, embedding_model)
+
     return db, chunks
 
-# UI Starts Here
-st.title("📘 Indian Constitution QA App ")
+
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.title("📘 Indian Constitution QA App")
 
 uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
 if uploaded_pdf:
     st.success("PDF loaded! Creating Vector Store… (1st time only)")
-    
+
     vectordb, chunks = load_vector_db(uploaded_pdf)
 
     question = st.text_input("Ask any question about the Constitution:")
 
     if question:
-        docs = vectordb.similarity_search(question, k=6)  
+        docs = vectordb.similarity_search(question, k=8)
         context = "\n\n".join([d.page_content for d in docs])
 
         st.write("### 📌 Answer:")
