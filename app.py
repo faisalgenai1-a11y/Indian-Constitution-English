@@ -10,93 +10,58 @@ import streamlit as st
 import tempfile
 import re
 
+from pypdf import PdfReader
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from groq import Groq
 
-
 # -----------------------------
-# 0. Streamlit basic settings
+# 1. Load Groq LLM
 # -----------------------------
-st.set_page_config(
-    page_title="Indian Constitution QA (Groq + RAG)",
-    page_icon="📘",
-    layout="wide"
-)
-
-st.title("📘 Indian Constitution QA App (Groq + RAG)")
-st.write("Ask questions from the uploaded Constitution PDF. Answer will come only from the PDF context.")
-
-
-# -----------------------------
-# 1. Groq client (safe)
-# -----------------------------
-groq_api_key = st.secrets.get("GROQ_API_KEY", None)
-
-if not groq_api_key:
-    st.error("❌ GROQ_API_KEY not found in Streamlit secrets. Please add it in .streamlit/secrets.toml")
-    st.stop()
-
+groq_api_key = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=groq_api_key)
 
-
 def call_llm(prompt: str) -> str:
-    """
-    Safe LLM caller: small model + limited tokens.
-    """
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",   # SAFE: small, fast, cheaper
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,                 # limit answer length
-            temperature=0.2,                # more factual
-        )
-        return response.choices[0].message.content
-
-    except Exception as e:
-        err_text = str(e)
-        # Handle quota / fair-use / 403 style issues gracefully
-        if "403" in err_text or "fair-use" in err_text.lower():
-            return "❌ Groq API quota / fair-use limit exceed ho gaya hai. New API key use karein ya thodi der baad try karein."
-        return f"❌ Error while calling LLM: {err_text}"
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",   # same as Colab
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=300,
+        temperature=0.2,
+    )
+    return response.choices[0].message.content
 
 
 # -----------------------------
-# 2. Build Vector DB (Colab-style)
+# 2. Build Vector DB (Colab style)
 # -----------------------------
 @st.cache_resource
-def build_vectordb_from_bytes(file_bytes: bytes):
-    """
-    PDF bytes se temp file banake,
-    PyPDFLoader + RecursiveCharacterTextSplitter se
-    FAISS vectordb create karta hai.
-    """
-    # Save uploaded PDF to a temporary file
+def build_vectordb(file_bytes: bytes):
+    # Save uploaded PDF to temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
 
-    # Load pages using PyPDFLoader (better than raw pypdf)
+    # Use PyPDFLoader like Colab
     loader = PyPDFLoader(tmp_path)
     pages = loader.load()
 
-    # Optional: skip first page (title/index etc.)
+    # Optional: skip first page (title / index)
     if len(pages) > 1:
         pages = pages[1:]
 
-    # Same style splitter as Colab
+    # Same splitter as Colab
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,         # bigger chunks = more context
-        chunk_overlap=150,       # overlap for better continuity
+        chunk_size=1000,
+        chunk_overlap=150,
         separators=["\n\n", "\n", ".", " ", ""]
     )
 
     docs = text_splitter.split_documents(pages)
-    all_docs = docs[:]   # copy for article-based search
+    all_docs = docs[:]  # keep copy for Article search
 
-    # Good quality embedding model (local, no API cost)
+    # Same (better) embedding model
     embedding_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-mpnet-base-v2"
     )
@@ -107,20 +72,13 @@ def build_vectordb_from_bytes(file_bytes: bytes):
 
 
 # -----------------------------
-# 3. Answer function (RAG logic)
+# 3. Answer function (same logic as Colab)
 # -----------------------------
 def answer_query(query: str, vectordb, all_docs, k: int = 8) -> str:
-    """
-    - Pehle semantic search se chunks nikalta hai
-    - Agar question me 'Article 21' type kuch hai to
-      us Article ka exact text bhi dhoondh ke context me top pe daalta hai
-    - Phir combined context LLM ko bhejta hai
-    """
-
     # 1) Normal semantic search
     retrieved_docs = vectordb.similarity_search(query, k=k)
 
-    # 2) Article number detection (e.g., "Article 21", "article 14")
+    # 2) Article number detection
     match = re.search(r'\barticle\s+(\d+)', query, re.IGNORECASE)
 
     if match:
@@ -130,21 +88,19 @@ def answer_query(query: str, vectordb, all_docs, k: int = 8) -> str:
 
         article_docs = []
 
-        # Search exact Article text in all_docs
         for d in all_docs:
             text = d.page_content
             if article_pattern_1 in text or article_pattern_2 in text:
                 article_docs.append(d)
 
-        # If Article text found, put it on top of retrieved_docs
+        # Put exact article docs on top
         if article_docs:
             retrieved_docs = article_docs + retrieved_docs
 
-    # If still nothing found
     if not retrieved_docs:
-        return "Context me available nahi hai. (PDF me related information nahi mili.)"
+        return "Context me available nahi hai."  # same message
 
-    # 3) Remove duplicate texts and keep max 8 chunks
+    # 3) Remove duplicates, keep max 8
     unique_texts = []
     final_docs = []
 
@@ -152,36 +108,33 @@ def answer_query(query: str, vectordb, all_docs, k: int = 8) -> str:
         if d.page_content not in unique_texts:
             unique_texts.append(d.page_content)
             final_docs.append(d)
+
         if len(final_docs) >= 8:
             break
 
-    # Combine all selected chunks into one context
     context = "\n\n".join(d.page_content for d in final_docs)
 
-    # 4) Prompt for LLM (simple + token friendly)
+    # 4) Prompt (almost same as Colab, bas wording Hindi/English mix)
     prompt = f"""
 You are a law teacher explaining the Constitution of India.
 
-RULES:
-- Use ONLY the context given below to answer the question.
-- Do NOT use any outside or general knowledge.
-- If the context does not clearly contain the answer, reply EXACTLY:
+Use ONLY the context given below to answer the question.
+Do NOT use any outside or general knowledge.
+If the context does not clearly contain the answer, reply EXACTLY:
 Context me available nahi hai.
 
-Write the answer in:
-- Simple English
-- Short and clear explanation
+Write the answer in simple English + thoda easy explanation.
+Use around 100–150 words.
 
-Format:
+Format your answer like this:
 - 3–5 bullet points explaining the main idea
-- Then 2–3 short sentences as a summary
-- Then 1 small real-life style example
+- Then 2–3 short sentences summary
+- Then give 1 small real-life style example
 
-CONTEXT:
+Context from the Constitution:
 {context}
 
-QUESTION:
-{query}
+Question: {query}
 """
 
     return call_llm(prompt)
@@ -190,32 +143,20 @@ QUESTION:
 # -----------------------------
 # 4. Streamlit UI
 # -----------------------------
-uploaded_pdf = st.file_uploader("Upload Constitution PDF (PDF file)", type=["pdf"])
+st.title("📘 Indian Constitution QA App (Groq + RAG)")
+
+uploaded_pdf = st.file_uploader("Upload Constitution PDF", type=["pdf"])
 
 if uploaded_pdf is not None:
-    st.success("✅ PDF uploaded! Ab vector store banaya ja raha hai (pehli baar thoda time lag sakta hai)...")
+    st.success("PDF loaded! Creating Vector Store… (first time thoda time lagega)")
 
-    # Build vector store from uploaded PDF bytes
-    vectordb, all_docs = build_vectordb_from_bytes(uploaded_pdf.getvalue())
+    # Important: pass bytes, not UploadedFile object
+    vectordb, all_docs = build_vectordb(uploaded_pdf.getvalue())
 
-    st.info("✅ Vector store ready! Ab aap question pooch sakte ho.")
+    question = st.text_input("Ask any question about the Constitution:")
 
-    # Question input
-    question = st.text_area(
-        "Ask any question about the Constitution:",
-        placeholder="Example: Explain Article 21 in simple English."
-    )
+    if question:
+        st.write("### 🔍 Answer:")
+        answer = answer_query(question, vectordb, all_docs)
+        st.write(answer)
 
-    # Button to avoid multiple automatic calls
-    if st.button("🔍 Get Answer"):
-        if not question.strip():
-            st.warning("❗ Please enter a question first.")
-        else:
-            with st.spinner("Thinking... (Groq se answer generate ho raha hai)"):
-                answer = answer_query(question, vectordb, all_docs)
-
-            st.markdown("### 🧠 Answer:")
-            st.write(answer)
-
-else:
-    st.info("👆 Pehle Indian Constitution ya koi relevant PDF upload karein.")
